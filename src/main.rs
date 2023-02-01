@@ -1,10 +1,17 @@
+use std::time::{Instant, SystemTime};
+use std::sync::Mutex;
+use lazy_static::lazy_static;
+use rand::{thread_rng, Rng};
+use core::cmp::{max, min};
+
+
 type Vals = i8;
 type Depth = u8;
 type Colors = i8;
 type Sigs = u64;
 
 const SIZEX: usize = 6;
-const SIZEY: usize = 7;
+const SIZEY: usize = 6;
 
 const FOUR: usize = 4;
 
@@ -17,9 +24,12 @@ const BLACK: Colors = -WHITE;
 type HVals = [[Sigs; SIZEY]; SIZEX];
 type Board = [[Colors; SIZEY]; SIZEX];
 
-const NB_BITS: u8 = 30;
+const NB_BITS: u8 = 27;
 const HASH_SIZE: usize = 1 << NB_BITS;
 const HASH_MASK: Sigs = (1 << NB_BITS) - 1;
+
+const VALMAX : Vals = Vals::MAX;
+
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
 struct HashElem {
@@ -35,94 +45,8 @@ const ZHASH: HashElem = HashElem {
     d: 0,
 };
 
-//type HTable = Box<[HashElem; HASH_SIZE]>;
+type HTable = Vec<Mutex<HashElem>>;
 
-use std::sync::Mutex;
-type HTable2 = Box<[Mutex<HashElem>; HASH_SIZE]>;
-const ZHASH_M: Mutex<HashElem> = Mutex::new(ZHASH);
-//static GLOBAL_VARIABLE: [Mutex<HashElem>; HASH_SIZE] = [ZHASH_M; HASH_SIZE];
-
-#[allow(dead_code)]
-fn eval3(x: usize, y: usize, color: Colors, tab: &Board) -> Vals {
-    // Below
-    let mut nb = 1;
-    if y >= 3 {
-        for d in 1..FOUR {
-            if tab[x][y - d] == color {
-                nb = nb + 1;
-            } else {
-                break;
-            }
-        }
-        if nb >= FOUR {
-            return color as Vals;
-        }
-    }
-
-    // Horizontal
-    nb = 1;
-    for d in 1..min(FOUR, SIZEX - x) {
-        if tab[x + d][y] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    for d in 1..min(FOUR, x + 1) {
-        if tab[x - d][y] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    if nb >= FOUR {
-        return color as Vals;
-    }
-
-    // Diag 1
-    nb = 1;
-    for d in 1..min(FOUR, min(SIZEX - x, SIZEY - y)) {
-        if tab[x + d][y + d] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    for d in 1..min(FOUR, min(x + 1, y + 1)) {
-        if tab[x - d][y - d] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    if nb >= FOUR {
-        return color as Vals;
-    }
-
-    // Diag 2
-    nb = 1;
-    for d in 1..min(FOUR, min(SIZEX - x, y + 1)) {
-        if tab[x + d][y - d] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    for d in 1..min(4, min(x + 1, SIZEY - y)) {
-        if tab[x - d][y + d] == color {
-            nb = nb + 1;
-        } else {
-            break;
-        }
-    }
-    if nb >= FOUR {
-        return color as Vals;
-    }
-
-    return 0;
-}
-
-// eval2 is slightly faster
 #[allow(dead_code)]
 fn eval2(x: usize, y: usize, color: Colors, tab: &Board) -> Vals {
     /* Vertical */
@@ -257,238 +181,258 @@ fn eval2(x: usize, y: usize, color: Colors, tab: &Board) -> Vals {
     return 0;
 }
 
-fn build_hashes() -> (Sigs, Sigs, HVals, HVals) {
-    use rand::{thread_rng, Rng};
-    let mut rng = thread_rng();
-    let mut hashesw = [[0; SIZEY]; SIZEX];
-    let mut hashesb = [[0; SIZEY]; SIZEX];
-    let turn_hash = rng.gen();
-    let first_hash = rng.gen();
-    for i in 0..SIZEX {
-        for j in 0..SIZEY {
-            hashesw[i][j] = rng.gen();
-            hashesb[i][j] = rng.gen();
-        }
+// The fastest but with unsafe array access
+#[allow(dead_code)]
+fn eval(x: usize, y: usize, color: Colors, tab: &Board) -> bool {
+    unsafe{
+	/* Vertical */
+	if y >= FOUR - 1 {
+            let mut d = 0;
+	    let mut j = y;
+            loop {
+		d += 1;
+		j -= 1;
+		if *tab.get_unchecked(x).get_unchecked(j) != color {break;}
+		if d == FOUR - 1 {return true;}
+		if j == 0 {break;}
+            };
+	}
+	
+	/* Horizontal */
+	{
+            let mut nb = 0;
+            if x < SIZEX - 1 {
+		let mut d = 0;
+		let mut i = x;
+		nb = loop {
+                    d += 1;
+                    i += 1;
+                    if *tab.get_unchecked(i).get_unchecked(y) != color {break d - 1;}
+		    if d == FOUR - 1 {return true;}
+                    if i == SIZEX - 1 {break d;}
+		};
+            }
+            if x > 0 {
+		let mut d = 0;
+		let mut i = x;
+		loop {
+                    d += 1;
+                    i -= 1;
+                    if *tab.get_unchecked(i).get_unchecked(y) != color {break;}
+		    if d + nb == FOUR - 1 {return true;}
+                    if i == 0 {break;}
+		};
+            }
+	}
+	
+	/* Diag 1 */
+	{
+            let mut nb = 0;
+            if (x > 0) && (y > 0) {
+		let mut d = 0;
+		let mut i = x;
+		let mut j = y;
+		nb = loop {
+                    d += 1;
+                    i -= 1;
+                    j -= 1;
+                    if *tab.get_unchecked(i).get_unchecked(j) != color {break d - 1;}
+		    if d == FOUR - 1 {return true;}
+                    if (i == 0) || (j == 0) {break d;}
+		};
+            }
+            if (x < SIZEX - 1) && (y < SIZEY - 1) {
+		let mut d = 0;
+		let mut i = x;
+		let mut j = y;
+		loop {
+                    d += 1;
+                    i += 1;
+                    j += 1;
+                    if *tab.get_unchecked(i).get_unchecked(j) != color {break;}
+		    if d + nb == FOUR - 1 {return true;}
+                    if (i == SIZEX - 1) || (j == SIZEY - 1) {break;}
+		};
+	    }
+	}
+	
+	/* Diag 2 */
+	{
+            let mut nb = 0;
+            if (x > 0) && (y < SIZEY - 1) {
+		let mut d = 0;
+		let mut i = x;
+		let mut j = y;
+		nb = loop {
+                    d += 1;
+                    i -= 1;
+                    j += 1;
+                    if *tab.get_unchecked(i).get_unchecked(j) != color {break d - 1;}
+                    if d == FOUR - 1 {return true;}
+		    if (i == 0) || (j == SIZEY - 1) {break d;}
+		};
+            }
+            if (x < SIZEX - 1) && (y > 0) {
+		let mut d = 0;
+		let mut i = x;
+		let mut j = y;
+		loop {
+                    d += 1;
+                    i += 1;
+                    j -= 1;
+                    if *tab.get_unchecked(i).get_unchecked(j) != color {break;}
+                    if d + nb == FOUR - 1 {return true;}
+		    if (i == SIZEX - 1) || (j == 0) {break;}
+		};
+            }
+	}
+	false
     }
-    return (turn_hash, first_hash, hashesw, hashesb);
 }
 
-fn retrieve(hv: Sigs, hashes: &HTable2) -> Option<(Vals, Vals)> {
-    let ind = (hv & HASH_MASK) as usize;
-    let data = hashes[ind].lock().unwrap();
-    if data.sig == hv {
-        return Some((data.v_inf, data.v_sup));
-    } else {
-        return None;
+lazy_static! {
+    static ref HW:HVals = {
+	let mut rng = thread_rng();
+	let mut t = [[0; SIZEY]; SIZEX];
+	for item in t.iter_mut() {
+	    for item2 in item.iter_mut() {
+		*item2 = rng.gen();
+	    }
+	}
+	t
+    };
+    static ref HB:HVals = {
+	let mut rng = thread_rng();
+	let mut t = [[0; SIZEY]; SIZEX];
+	for item in t.iter_mut() {
+	    for item2 in item.iter_mut() {
+		*item2 = rng.gen();
+	    }
+	}
+	t
+    };
+    static ref FH:Sigs = {
+	let mut rng = thread_rng();
+	rng.gen()
+    };
+    static ref IND:[usize;SIZEX]= {
+	let mut t = [0;SIZEX];
+	for (ix,item) in t.iter_mut().enumerate() {
+	    *item=(SIZEX - 1) / 2 + (ix + 1) / 2 * (2 * (ix % 2)) - (ix + 1) / 2;
+	}
+	t
     };
 }
 
-use core::cmp::{max, min};
+fn retrieve(hv: Sigs, hashes: &HTable) -> Option<(Vals, Vals)> {
+    let ind = (hv & HASH_MASK) as usize;
+    let data = hashes[ind].lock().unwrap();
+    if data.sig == hv {return Some((data.v_inf, data.v_sup));}
+    else {return None;};
+}
 
-fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, depth: Depth, hashes: &HTable2) {
+fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, depth: Depth, hashes: &HTable) {
     let ind = (hv & HASH_MASK) as usize;
     let d = MAXDEPTH + 2 - depth;
     let mut data = hashes[ind].lock().unwrap();
     if data.d <= d {
         if data.sig != hv {
             data.d = d;
-            data.v_inf = Vals::MIN;
-            data.v_sup = Vals::MAX;
+            data.v_inf = -VALMAX;
+            data.v_sup = VALMAX;
             data.sig = hv;
         }
         if (g > alpha) && (g < beta) {
             data.v_inf = g;
             data.v_sup = g;
-        } else if g <= alpha {
-            data.v_sup = min(g, data.v_sup);
-        } else if g >= beta {
-            data.v_inf = max(g, data.v_inf);
         }
+	else if g <= alpha {data.v_sup = min(g, data.v_sup);}
+	else if g >= beta {data.v_inf = max(g, data.v_inf);}
     }
 }
 
-fn ab(
-    alpha: Vals,
-    beta: Vals,
-    color: Colors,
-    depth: Depth,
-    tab: &mut Board,
-    first: &mut [usize; SIZEX],
-    nodes: &mut u64,
-    hv: Sigs,
-    hv2: Sigs,
-    turn_hash: Sigs,
-    first_hash: Sigs,
-    hashesw: HVals,
-    hashesb: HVals,
-    hashes: &HTable2,
-) -> Vals {
-    *nodes = *nodes + 1;
-
-    //   if hv != compute_hash(color,tab,first_hash,turn_hash,hashesw,hashesb) {panic!("Bad hash");}
-
+fn ab(alpha: Vals,
+      beta: Vals,
+      color: Colors,
+      depth: Depth,
+      tab: &mut Board,
+      first: &mut [usize; SIZEX],
+      hv: Sigs,
+      hv2: Sigs,
+      hashes: &mut HTable) -> Vals {
     let mut a = alpha;
     let mut b = beta;
-
-    match retrieve(min(hv, hv2), hashes) {
-        Some((v_inf, v_sup)) => {
-            if v_inf == v_sup {
-                return v_inf;
-            }
-            if v_inf >= b {
-                return v_inf;
-            }
-            if v_sup <= a {
-                return v_sup;
-            }
-            a = max(a, v_inf);
-            b = min(b, v_sup);
-        }
-        None => {}
+    if let Some((v_inf,v_sup)) = retrieve(min(hv, hv2), hashes) {
+        if v_inf == v_sup {return v_inf;}
+        if v_inf >= b {return v_inf;}
+        if v_sup <= a {return v_sup;}
+        a = max(a, v_inf);
+        b = min(b, v_sup);
     }
-
-    for x in 0..SIZEX {
-        let y = first[x];
-        if y != SIZEY {
-            let v = eval2(x, y, color, tab);
-            if v != 0 {
-                return v;
-            }
-        }
-    }
-    if depth == MAXDEPTH {
-        return 0;
-    }
-    let mut g;
-    if color == WHITE {
-        g = Vals::MIN;
-    } else {
-        g = Vals::MAX;
-    }
-
     for ix in 0..SIZEX {
-        let x = (SIZEX - 1) / 2 + (ix + 1) / 2 * (2 * (ix % 2)) - (ix + 1) / 2;
+	let x = IND[ix];
+        let y = first[x];
+	if (y != SIZEY) && eval(x, y, color, tab) {return 1;}
+    }
+    if depth == MAXDEPTH {return 0;}
+    let mut g = -VALMAX;
+    let hvl = if color==WHITE {*HW} else {*HB};
+    for ix in 0..SIZEX {
+	let x = IND[ix];
         let y = first[x];
         if y < SIZEY {
             tab[x][y] = color;
-            first[x] = first[x] + 1;
-            let nhv;
-            let nhv2;
-            if color == WHITE {
-                nhv = hv ^ hashesw[x][y];
-                nhv2 = hv2 ^ hashesw[SIZEX - 1 - x][y];
-            } else {
-                nhv = hv ^ hashesb[x][y];
-                nhv2 = hv2 ^ hashesb[SIZEX - 1 - x][y];
-            }
-            let v = ab(
-                a,
-                b,
-                -color,
-                depth + 1,
-                tab,
-                first,
-                nodes,
-		// turn_hash is useless in connect4
-                nhv ^ turn_hash,nhv2 ^ turn_hash,
-//                nhv,nhv2,
-                turn_hash,
-                first_hash,
-                hashesw,
-                hashesb,
-                hashes,
-            );
-            first[x] = first[x] - 1;
+            first[x] += 1;
+	    g = max(g,-ab(-b,-a,-color,depth+1,tab,first,
+			  hv^hvl[x][y],hv2^hvl[SIZEX-1-x][y],hashes));
+            first[x] -= 1;
             tab[x][y] = EMPTY;
-            if color == WHITE {
-                if v > g {
-                    g = v;
-                    if g > a {
-                        a = g;
-                        if a >= b {
-                            break;
-                        }
-                    }
-                }
-            } else {
-                if v < g {
-                    g = v;
-                    if g < b {
-                        b = g;
-                        if a >= b {
-                            break;
-                        }
-                    }
-                }
-            }
+	    a = max(a,g);
+	    if a >= b {break;}
         }
     }
     store(min(hv, hv2), alpha, beta, g, depth, hashes);
-    return g;
+    g
 }
 
-fn compute_hash(
-    color: Colors,
-    tab: &mut Board,
-    first_hash: Sigs,
-    turn_hash: Sigs,
-    hashesw: HVals,
-    hashesb: HVals,
-) -> Sigs {
-    let mut h = first_hash;
-    if color == BLACK {
-        h = h ^ turn_hash;
-    }
-    for i in 0..SIZEX {
-        for j in 0..SIZEY {
-            match tab[i][j] {
-                BLACK => {
-                    h = h ^ hashesb[i][j];
-                }
-                WHITE => {
-                    h = h ^ hashesw[i][j];
-                }
+fn compute_hash(tab: &mut Board) -> Sigs {
+    let mut h = *FH;
+    for (i,row) in tab.iter_mut().enumerate() {
+	for (j,e) in row.iter_mut().enumerate() {
+	    match *e {
+                BLACK => {h ^= HB[i][j];}
+                WHITE => {h ^= HW[i][j];}
                 _ => {}
             }
         }
     }
-    return h;
+    h
 }
 
 fn main() {
-    use std::time::{Instant, SystemTime};
     let mut tab = [[EMPTY; SIZEY]; SIZEX];
     let mut first = [0; SIZEX];
-    let mut nodes = 0;
-//    let mut hashes = Box::new([ZHASH; HASH_SIZE]);
-    let hashes = Box::new([ZHASH_M; HASH_SIZE]);
-
-    let (turn_hash, first_hash, hashesw, hashesb) = build_hashes();
-    let hv = compute_hash(WHITE, &mut tab, first_hash, turn_hash, hashesw, hashesb);
-    let hv2 = first_hash;
+    let mut hashes = (0..HASH_SIZE).map(|_x| Mutex::new(ZHASH)).collect();
+    
+    let hv = compute_hash(&mut tab);
+    let hv2 = *FH;
     if hv != hv2 {
         panic!("Why???");
     };
     let now = Instant::now();
     let snow = SystemTime::now();
     let ret = ab(
-        Vals::MIN,
-        Vals::MAX,
+        -VALMAX,
+        VALMAX,
         WHITE,
         0,
         &mut tab,
         &mut first,
-        &mut nodes,
         hv,
         hv2,
-        turn_hash,
-        first_hash,
-        hashesw,
-        hashesb,
-        &hashes,
+        &mut hashes,
     );
     println!("wall_clock={:?}", now.elapsed());
     println!("system_clock={:?}", snow.elapsed().unwrap());
     println!("ret={}", ret);
-    println!("nodes={}", nodes);
 }
