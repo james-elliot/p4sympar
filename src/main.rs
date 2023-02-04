@@ -350,19 +350,22 @@ fn store(hv: Sigs, alpha: Vals, beta: Vals, g: Vals, depth: Depth, hashes: &HTab
 	else if g >= beta {data.v_inf = max(g, data.v_inf);}
     }
 }
+struct Args<'a> {
+    alpha: Vals,
+    beta: Vals,
+    color: Colors,
+    depth: Depth,
+    tab: &'a mut Board,
+    first: &'a mut [usize; SIZEX],
+    hv: Sigs,
+    hv2: Sigs,
+    hashes: &'a mut HTable
+}
 
-fn ab(alpha: Vals,
-      beta: Vals,
-      color: Colors,
-      depth: Depth,
-      tab: &mut Board,
-      first: &mut [usize; SIZEX],
-      hv: Sigs,
-      hv2: Sigs,
-      hashes: &mut HTable) -> Vals {
-    let mut a = alpha;
-    let mut b = beta;
-    if let Some((v_inf,v_sup)) = retrieve(min(hv, hv2), hashes) {
+fn ab2(args: Args) -> Vals {
+    let mut a = args.alpha;
+    let mut b = args.beta;
+    if let Some((v_inf,v_sup)) = retrieve(min(args.hv, args.hv2), args.hashes) {
         if v_inf == v_sup {return v_inf;}
         if v_inf >= b {return v_inf;}
         if v_sup <= a {return v_sup;}
@@ -371,27 +374,30 @@ fn ab(alpha: Vals,
     }
     for ix in 0..SIZEX {
 	let x = IND[ix];
-        let y = first[x];
-	if (y != SIZEY) && eval(x, y, color, tab) {return 1;}
+        let y = args.first[x];
+	if (y != SIZEY) && eval(x, y, args.color, args.tab) {return 1;}
     }
-    if depth == MAXDEPTH {return 0;}
+    if args.depth == MAXDEPTH {return 0;}
     let mut g = -VALMAX;
-    let hvl = if color==WHITE {*HW} else {*HB};
+    let hvl = if args.color==WHITE {*HW} else {*HB};
     for ix in 0..SIZEX {
 	let x = IND[ix];
-        let y = first[x];
+        let y = args.first[x];
         if y < SIZEY {
-            tab[x][y] = color;
-            first[x] += 1;
-	    g = max(g,-ab(-b,-a,-color,depth+1,tab,first,
-			  hv^hvl[x][y],hv2^hvl[SIZEX-1-x][y],hashes));
-            first[x] -= 1;
-            tab[x][y] = EMPTY;
+            args.tab[x][y] = args.color;
+            args.first[x] += 1;
+	    let args2 = Args {alpha:-b,beta:-a,color:-args.color,depth:args.depth+1,
+			      tab:args.tab,first:args.first,
+			      hv:args.hv^hvl[x][y],hv2:args.hv2^hvl[SIZEX-1-x][y],
+			      hashes:args.hashes};
+	    g=max(g,-ab2(args2));
+            args.first[x] -= 1;
+            args.tab[x][y] = EMPTY;
 	    a = max(a,g);
 	    if a >= b {break;}
         }
     }
-    store(min(hv, hv2), alpha, beta, g, depth, hashes);
+    store(min(args.hv, args.hv2), args.alpha, args.beta, g, args.depth, args.hashes);
     g
 }
 
@@ -412,26 +418,17 @@ fn compute_hash(tab: &mut Board) -> Sigs {
 fn main() {
     let mut tab = [[EMPTY; SIZEY]; SIZEX];
     let mut first = [0; SIZEX];
-    let mut hashes = (0..HASH_SIZE).map(|_x| Mutex::new(ZHASH)).collect();
+    let mut hashes = (0..HASH_SIZE).map(|_| Mutex::new(ZHASH)).collect();
     
     let hv = compute_hash(&mut tab);
     let hv2 = *FH;
-    if hv != hv2 {
-        panic!("Why???");
-    };
+    if hv != hv2 {panic!("Why???");};
     let now = Instant::now();
     let snow = SystemTime::now();
-    let ret = ab(
-        -VALMAX,
-        VALMAX,
-        WHITE,
-        0,
-        &mut tab,
-        &mut first,
-        hv,
-        hv2,
-        &mut hashes,
-    );
+    let args0 =
+	Args{alpha:-VALMAX, beta:VALMAX, color:WHITE, depth:0, tab:&mut tab,
+	     first: &mut first, hv, hv2,hashes:&mut hashes };
+    let ret = ab2(args0);
     println!("wall_clock={:?}", now.elapsed());
     println!("system_clock={:?}", snow.elapsed().unwrap());
     println!("ret={}", ret);
