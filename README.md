@@ -1,6 +1,6 @@
-# p4sym, a parallel solver for the connect-4 (puissance 4 in french) game
+# p4sympar, a parallel solver for the connect-4 (puissance 4 in french) game
 
-This program is quite "state of the art" regarding the use of symmetries 
+The program is quite "state of the art" regarding the use of symmetries 
 and hash tables. 
 
-The parallel branch is a work in progress. Do not use.
+This parallel code is a work in progress. Do not use. See p4sym for a (sequential) working code.
